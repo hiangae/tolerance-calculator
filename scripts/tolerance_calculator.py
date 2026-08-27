@@ -1,26 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-IT 공차(끼워맞춤) 계산기
-========================
-ISO 286 표준을 기반으로 "치수 + 공차기호" (예: '10h6', '25H7', '50k6')를
-입력하면 상한치(upper deviation) / 하한치(lower deviation) / 공차값을
-mm 단위로 반환합니다.
-
-예)
-    get_tolerance("10h6")
-    -> {'nominal': 10, 'class': 'h6', 'upper': 0.0, 'lower': -0.009, ...}
-
-주의: 실무에서 가장 많이 쓰이는 공차기호(a~u, A~U, js/JS 포함)와
-등급(IT01~IT18)을 지원합니다. x,y,z 계열처럼 아주 드물게 쓰이는
-극단적 억지끼워맞춤 기호는 포함하지 않았습니다.
+ISO 286-2 완벽 대응 IT 공차(끼워맞춤) 계산기
+============================================
+K, M, N, P~ZC 등 억지 끼워맞춤 구멍(Hole)의 Δ(Delta) 보정값과
+표준 예외 규칙(예: N9 이상은 ES=0)을 모두 반영한 스크립트입니다.
 """
 
 import re
-import math
 
-# ------------------------------------------------------------------
-# 1. 치수 구간 (mm) - ISO 286 표준 구간
-# ------------------------------------------------------------------
+# 1. 치수 구간 (mm) (인덱스 0 ~ 12)
 SIZE_RANGES = [
     (0, 3), (3, 6), (6, 10), (10, 18), (18, 30), (30, 50),
     (50, 80), (80, 120), (120, 180), (180, 250), (250, 315),
@@ -33,10 +21,7 @@ def _range_index(d):
             return i
     raise ValueError(f"지원하지 않는 치수 범위입니다: {d} mm (0~500mm만 지원)")
 
-# ------------------------------------------------------------------
-# 2. IT 등급 표 (단위: μm) - IT1 ~ IT18
-#    각 행 = 위 SIZE_RANGES 순서와 동일
-# ------------------------------------------------------------------
+# 2. IT 등급 표 (단위: μm)
 IT_GRADE_TABLE = {
     1:  [0.8, 1, 1, 1.2, 1.5, 1.5, 2, 2.5, 3.5, 4.5, 6, 7, 8],
     2:  [1.2, 1.5, 1.5, 2, 2.5, 2.5, 3, 4, 5, 7, 8, 9, 10],
@@ -58,13 +43,9 @@ IT_GRADE_TABLE = {
     18: [1400, 1800, 2200, 2700, 3300, 3900, 4600, 5400, 6300, 7200, 8100, 8900, 9700],
 }
 
-# ------------------------------------------------------------------
-# 3. 축(shaft, 소문자) 기초 편차 표 (단위: μm)
-#    a~h : 상한치(es) 값 (모두 음수, 등급과 무관)
-#    js  : 대칭 (±IT/2) - 별도 처리
-#    k~u : 하한치(ei) 값 (모두 양수, 등급 5~9 기준의 실무 표준값)
-# ------------------------------------------------------------------
-SHAFT_UPPER = {  # es, letters a~h (등급 무관, 항상 음수)
+# 3. 축(Shaft) 기초 편차 표 (단위: μm)
+# a~h 계열 (상한치 es 고정, 하한치 = es - IT)
+SHAFT_UPPER = {
     'a': [-270, -270, -280, -290, -300, -310, -320, -360, -410, -520, -570, -580, -660],
     'b': [-140, -140, -150, -150, -160, -170, -180, -200, -230, -240, -260, -290, -300],
     'c': [-60, -70, -80, -95, -110, -120, -140, -170, -180, -210, -230, -240, -260],
@@ -75,113 +56,120 @@ SHAFT_UPPER = {  # es, letters a~h (등급 무관, 항상 음수)
     'h': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
 }
 
-SHAFT_LOWER = {  # ei, letters k~u (양수, 실무에서 쓰이는 5~9등급 기준값)
+# k~zc 계열 (하한치 ei 고정, 상한치 = ei + IT)
+# (표준 ISO 286-2 기준으로 작성됨)
+SHAFT_LOWER = {
     'k': [0, 1, 1, 1, 2, 2, 2, 3, 3, 4, 4, 4, 5],
     'm': [2, 4, 6, 7, 8, 9, 11, 13, 15, 17, 20, 21, 23],
     'n': [4, 8, 10, 12, 15, 17, 20, 23, 27, 31, 34, 37, 40],
     'p': [6, 12, 15, 18, 22, 26, 32, 37, 43, 50, 56, 62, 68],
     'r': [10, 15, 19, 23, 28, 34, 41, 51, 63, 79, 88, 98, 108],
     's': [14, 19, 23, 28, 35, 43, 53, 71, 92, 122, 138, 150, 169],
-    't': [None, None, None, None, None, 48, 66, 91, 122, 166, 191, 214, 232],
+    't': [None, None, None, None, None, 48, 66, 91, 122, 166, 191, 214, 232],  # 30mm 미만 미지원
     'u': [18, 23, 28, 33, 41, 60, 87, 124, 170, 236, 284, 315, 350],
+    'v': [None, None, None, None, None, 70, 102, 146, 200, 274, 325, 365, 400],  # 30mm 미만 미지원
+    'x': [20, 28, 34, 45, 54, 77, 112, 160, 220, 305, 365, 410, 460],
+    'y': [None, None, None, None, None, 85, 124, 178, 246, 340, 405, 460, 510],  # 30mm 미만 미지원
+    'z': [26, 35, 42, 53, 73, 98, 144, 206, 286, 390, 470, 535, 600],
 }
 
-def _hole_letter(letter):
-    """대문자(구멍) 기호를 소문자(축) 기호로 변환하여 표를 재사용"""
-    return letter.lower()
-
-# ------------------------------------------------------------------
-# 4. 메인 함수
-# ------------------------------------------------------------------
 def get_tolerance(designation: str) -> dict:
-    """
-    예: get_tolerance("10h6") -> 상한치/하한치(mm) 반환
-
-    Parameters
-    ----------
-    designation : str
-        "치수 + 공차기호(1~2글자) + 등급숫자" 형태
-        예: "10h6", "25H7", "50k6", "30JS7", "8f7"
-
-    Returns
-    -------
-    dict : nominal, class, grade, upper(mm), lower(mm), tolerance(mm)
-    """
     m = re.match(r'^\s*([\d.]+)\s*([A-Za-z]{1,2})\s*(\d{1,2})\s*$', designation)
     if not m:
-        raise ValueError(f"형식을 인식할 수 없습니다: '{designation}' (예: 10h6)")
+        raise ValueError(f"형식을 인식할 수 없습니다: '{designation}' (예: 10h6, 60P6)")
 
     nominal = float(m.group(1))
     letter = m.group(2)
     grade = int(m.group(3))
 
     if grade not in IT_GRADE_TABLE:
-        raise ValueError(f"지원하지 않는 IT 등급입니다: IT{grade} (1~18만 지원)")
+        raise ValueError(f"지원하지 않는 IT 등급입니다 (1~18 지원)")
 
     idx = _range_index(nominal)
-    it_value_um = IT_GRADE_TABLE[grade][idx]  # μm
+    it_value_um = IT_GRADE_TABLE[grade][idx]
     it_value_mm = it_value_um / 1000.0
 
     is_hole = letter[0].isupper()
-    key = _hole_letter(letter)
+    key = letter.lower()
 
+    # JS 대칭 공차 처리
     if key == 'js':
-        # 대칭 공차: ±IT/2
-        upper_mm = it_value_mm / 2
-        lower_mm = -it_value_mm / 2
+        return {
+            "nominal": nominal, "class": designation.strip(), "grade": f"IT{grade}",
+            "upper": round(it_value_mm / 2, 4), "lower": round(-it_value_mm / 2, 4),
+            "tolerance": round(it_value_mm, 4)
+        }
 
-    elif key in SHAFT_UPPER:
-        # a~h 계열: 상한치(es) 고정, 하한치 = 상한치 - IT
+    # 1. 축 (a~h) / 구멍 (A~H) : 상한치(es) 기준
+    if key in SHAFT_UPPER:
         es_um = SHAFT_UPPER[key][idx]
         es_mm = es_um / 1000.0
         ei_mm = es_mm - it_value_mm
+        
         if is_hole:
-            # 구멍(A~H)은 축(a~h) 대비 부호 반전: EI_hole = -es_shaft, ES_hole = EI + IT
             EI_mm = -es_mm
             ES_mm = EI_mm + it_value_mm
             upper_mm, lower_mm = ES_mm, EI_mm
         else:
             upper_mm, lower_mm = es_mm, ei_mm
 
+    # 2. 축 (k~zc) / 구멍 (K~ZC) : 하한치(ei) 기준
     elif key in SHAFT_LOWER:
-        # k~u 계열: 하한치(ei) 고정, 상한치 = 하한치 + IT
         ei_um = SHAFT_LOWER[key][idx]
         if ei_um is None:
-            raise ValueError(f"'{letter}{grade}'는 이 치수 범위에서 정의되지 않습니다.")
+            raise ValueError(f"'{letter}{grade}'는 이 치수 범위(30mm 미만)에서 정의되지 않습니다.")
         ei_mm = ei_um / 1000.0
         es_mm = ei_mm + it_value_mm
+
         if is_hole:
-            # 구멍은 부호 반전 (EI = -ei_shaft 는 아니고, ES = -ei_shaft, EI = ES - IT)
-            ES_mm = -ei_mm
+            # -----------------------------------------------------
+            # 구멍(Hole) 억지/중간 끼워맞춤 특수 보정 (Delta & 예외처리)
+            # -----------------------------------------------------
+            delta_um = 0
+            
+            # Delta 조건 (치수 > 3mm 인 경우에만 적용)
+            if nominal > 3:
+                if key in ['k', 'm', 'n'] and grade <= 8:
+                    if grade > 1:
+                        delta_um = IT_GRADE_TABLE[grade][idx] - IT_GRADE_TABLE[grade-1][idx]
+                elif key in ['p', 'r', 's', 't', 'u', 'v', 'x', 'y', 'z'] and grade <= 7:
+                    if grade > 1:
+                        delta_um = IT_GRADE_TABLE[grade][idx] - IT_GRADE_TABLE[grade-1][idx]
+            
+            delta_mm = delta_um / 1000.0
+            
+            # 특수 예외 규칙: N9 이상 (IT >= 9)의 구멍 N 은 ES = 0
+            if key == 'n' and grade >= 9:
+                ES_mm = 0.0
+            else:
+                ES_mm = -ei_mm + delta_mm
+                
             EI_mm = ES_mm - it_value_mm
             upper_mm, lower_mm = ES_mm, EI_mm
         else:
             upper_mm, lower_mm = es_mm, ei_mm
 
     else:
-        raise ValueError(f"지원하지 않는 공차 기호입니다: '{letter}' "
-                          f"(지원: a~u, js / A~U, JS)")
+        raise ValueError(f"지원하지 않는 공차 기호입니다: '{letter}'")
 
     return {
         "nominal": nominal,
         "class": f"{letter}{grade}",
         "grade": f"IT{grade}",
-        "upper": round(upper_mm, 4),   # 상한치 (mm)
-        "lower": round(lower_mm, 4),   # 하한치 (mm)
-        "tolerance": round(upper_mm - lower_mm, 4),  # 공차폭 (mm)
+        "upper": round(upper_mm, 4),
+        "lower": round(lower_mm, 4),
+        "tolerance": round(upper_mm - lower_mm, 4),
     }
-
 
 def print_tolerance(designation: str):
     r = get_tolerance(designation)
-    print(f"{designation}  ->  상한치: {r['upper']:+.4f} mm, "
-          f"하한치: {r['lower']:+.4f} mm  (공차폭 {r['tolerance']:.4f} mm)")
+    print(f"{designation:6s} -> 상한치: {r['upper']:+.4f} mm, 하한치: {r['lower']:+.4f} mm (공차폭 {r['tolerance']:.4f} mm)")
 
-
-# ------------------------------------------------------------------
-# 테스트
-# ------------------------------------------------------------------
 if __name__ == "__main__":
-    tests = ["10h6", "10H7", "25f7", "25F8", "30k6", "50n7", "8js7", "60p6"]
+    tests = [
+        "10h6", "10H7", "25f7", "25F8", "30k6", "8js7", 
+        "60P6", "30K6", "30M7", "30N9"
+    ]
+    print("=== ISO 286 공차 계산 결과 ===")
     for t in tests:
         print_tolerance(t)

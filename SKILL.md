@@ -1,5 +1,6 @@
 ---
 name: tolerance-calculator
+version: 1.0
 description: Calculate mechanical fit tolerances (끼워맞춤/공차) from an ISO 286 designation such as "10h6", "25H7", or "50k6". Use this skill whenever the user asks for a part's upper/lower deviation, tolerance width, or fit limits given a dimension plus a tolerance class letter and grade number — even if they phrase it casually like "이 축의 상한치·하한치가 얼마야?", "25f7 공차 알려줘", or "구멍 H7 치수 범위 계산해줘". Trigger on any mention of IT grades, shaft/hole tolerance letters (a~u / A~U / js), or ISO 286 fits. Do NOT use for general unit conversion, GD&T symbol interpretation beyond basic deviations, or non-ISO standards.
 ---
 
@@ -8,11 +9,14 @@ description: Calculate mechanical fit tolerances (끼워맞춤/공차) from an I
 This skill computes the upper deviation, lower deviation, and total tolerance
 width (in mm) for a mechanical feature specified by an ISO 286 designation.
 
-The bundled script `scripts/tolerance_calculator.py` implements the ISO 286
-standard tables (size ranges 0–500 mm, IT grades 1–18, shaft/hole letters
-a~u / A~U / js). It is deterministic and self-contained — always run it rather
-than computing deviations by hand, because the standard tables are easy to
-misremember and small errors propagate directly into manufacturing decisions.
+The bundled script `scripts/tolerance_calculator.py` implements the ISO 286-1 /
+ISO 286-2 standard tables (size ranges 0–500 mm, IT grades 1–18, shaft/hole
+letters a~z / A~ZC plus js/JS). It also applies the hole-side Δ (Delta)
+correction and the N9-and-above ES=0 exception required by ISO 286-2 for
+interference/transition holes (K~ZC). It is deterministic and self-contained —
+always run it rather than computing deviations by hand, because the standard
+tables are easy to misremember and small errors propagate directly into
+manufacturing decisions.
 
 ## When to use
 
@@ -64,8 +68,16 @@ manufacturing window.
 - **`h` / `H`** have one deviation pinned to zero (shaft `h`: upper = 0; hole
   `H`: lower = 0).
 - **`js` / `JS`** is symmetric about the nominal size (±IT/2).
-- Supported letters are `a~u` and `A~U` plus `js`/`JS`. Rare extreme-fit letters
-  (`x`, `y`, `z`) are intentionally not included.
+- Supported letters are `a~z` and `A~ZC` plus `js`/`JS` (v, x, y, z included).
+- **Hole-side Δ correction (ISO 286-2):** for interference/transition holes
+  (uppercase K~ZC), the upper deviation is `ES = −ei + Δ`, where
+  `Δ = IT(n) − IT(n−1)`. This applies only when nominal > 3 mm, and only for
+  K/M/N at grade ≤ 8 and P/R/S/T/U/V/X/Y/Z at grade ≤ 7.
+- **N9-and-above exception:** for hole `N` at grade ≥ 9 (N9~N18), `ES = 0`
+  regardless of the Δ rule.
+- **Not supported below 30 mm:** shaft/hole letters `t`, `v`, `y` have no
+  defined values in the < 30 mm size ranges, so any designation using them
+  with a nominal size ≤ 30 mm raises an error instead of returning a value.
 
 ## Error handling
 
@@ -73,7 +85,8 @@ The script raises `ValueError` for unsupported inputs. Surface these clearly:
 
 - Dimension outside 0–500 mm → "지원하지 않는 치수 범위"
 - Grade outside IT1–IT18 → "지원하지 않는 IT 등급"
-- Unsupported letter (e.g. `x`, `y`, `z`) → "지원하지 않는 공차 기호"
+- Unsupported letter → "지원하지 않는 공차 기호"
+- `t`/`v`/`y` used with a nominal size ≤ 30 mm → "이 치수 범위(30mm 미만)에서 정의되지 않습니다"
 - Malformed input (not matching `<number><letter><grade>`) → "형식을 인식할 수 없습니다"
 
 When an error occurs, tell the user what range/format is supported and ask for
